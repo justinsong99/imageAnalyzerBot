@@ -1,0 +1,838 @@
+/* global __dirname */
+
+/*-----------------------------------------------------------------------------
+A simple Language Understanding (LUIS) bot for the Microsoft Bot Framework. 
+-----------------------------------------------------------------------------*/
+
+'use strict';
+var restify = require('restify');
+var builder = require('botbuilder');
+var botbuilder_azure = require("botbuilder-azure");
+var stringurl = " ";
+var imagelink = " ";
+var Jimp = require('jimp2');
+var fs = require('fs');
+var imguruploader = require('imgur-uploader');
+var analyzedimage = " ";
+var analyzedimage2 = " ";
+var amount = 0;
+var amount2 = 0;
+var top = [];
+var left = [];
+var width = [];
+var height = [];
+var top2 = [];
+var left2 = [];
+var width2 = [];
+var height2 = [];
+var answernumber = 0;
+var answernumber2 = 0;
+var emotionstring2 = " ";
+var emotionstring = " ";
+
+// Setup Restify Server
+var server = restify.createServer();
+server.listen(process.env.port || process.env.PORT || 3978, function () {
+    console.log('%s listening to %s', server.name, server.url);
+});
+  
+// Create chat connector for communicating with the Bot Framework Service
+var connector = new builder.ChatConnector({
+    appId: process.env.MicrosoftAppId,
+    appPassword: process.env.MicrosoftAppPassword,
+    openIdMetadata: process.env.BotOpenIdMetadata
+});
+
+// Listen for messages from users 
+server.post('/api/messages', connector.listen());
+
+/*----------------------------------------------------------------------------------------
+* Bot Storage: This is a great spot to register the private state storage for your bot. 
+* We provide adapters for Azure Table, CosmosDb, SQL Azure, or you can implement your own!
+* For samples and documentation, see: https://github.com/Microsoft/BotBuilder-Azure
+* ---------------------------------------------------------------------------------------- */
+
+var tableName = 'botdata';
+var azureTableClient = new botbuilder_azure.AzureTableClient(tableName, process.env['AzureWebJobsStorage']);
+var tableStorage = new botbuilder_azure.AzureBotStorage({ gzipData: false }, azureTableClient);
+
+// Create your bot with a function to receive messages from the user
+// This default message handler is invoked if the user's utterance doesn't
+// match any intents handled by other dialogs.
+var bot = new builder.UniversalBot(connector, function (session, args) {
+    session.send('You reached the default message handler. You said \'%s\'.', session.message.text);
+});
+
+bot.set('storage', tableStorage);
+
+// Make sure you add code to validate these fields
+var luisAppId = process.env.LuisAppId;
+var luisAPIKey = process.env.LuisAPIKey;
+var luisAPIHostName = process.env.LuisAPIHostName || 'westus.api.cognitive.microsoft.com';
+
+const LuisModelUrl = 'https://' + luisAPIHostName + '/luis/v2.0/apps/' + luisAppId + '?subscription-key=' + luisAPIKey;
+
+// Create a recognizer that gets intents from LUIS, and add it to the bot
+var recognizer = new builder.LuisRecognizer(LuisModelUrl);
+bot.recognizer(recognizer);
+
+// Add a dialog for each intent that the LUIS app recognizes.
+// See https://docs.microsoft.com/en-us/bot-framework/nodejs/bot-builder-nodejs-recognize-intent-luis 
+bot.dialog('GreetingDialog',
+    (session) => {
+        session.send('You reached the Greeting intent. You said \'%s\'.', session.message.text);
+        session.endDialog();
+    }
+    ).triggerAction({
+    matches: 'Greeting'
+})
+
+bot.dialog('HelpDialog',
+    (session) => {
+        session.send('You reached the Help intent. You said \'%s\'.', session.message.text);
+        session.endDialog();
+    }
+    ).triggerAction({
+    matches: 'Help'
+})
+
+bot.dialog('CancelDialog',
+    (session) => {
+        session.send('You reached the Cancel intent. You said \'%s\'.', session.message.text);
+        session.endDialog();
+    }
+    ).triggerAction({
+    matches: 'Cancel'
+})
+bot.dialog('AnalyzeImage', [
+    function (session) {
+        session.beginDialog('AnalyzeaImage');
+    }
+]).triggerAction({
+    matches: 'AnalyzeImage'
+});
+
+bot.dialog('AnalyzeaImage', [
+
+    function (session) {
+
+        session.send('Welcome to the Image Analyzer');
+        builder.Prompts.text(session, "Would you like to upload an image or enter an image link?");
+    },
+
+    function (session, results) {
+        var answer1 = results.response;
+        var checker = answer1.includes("link");
+        var checker2 = answer1.includes("upload");
+        if (checker) {
+            session.beginDialog('ImageLink');
+        }
+        else if (checker2) {
+            session.beginDialog('UploadImage');
+        } else {
+            session.send('We could not recognize your answer, please try again');
+            session.beginDialog('AnalyzeaImage');
+        }
+
+    }
+])
+
+bot.dialog('ImageLink', [
+
+    function (session, results) {
+        builder.Prompts.text(session, "Please enter the image link");
+
+    },
+    function (session, results) {
+        imagelink = results.response;
+        var imagelinkconfirm = imagelink.includes("https");
+        var imagelinkconfirm2 = imagelink.includes("http");
+
+        if (imagelinkconfirm || imagelinkconfirm2) {
+            session.send("This is the image link that was submitted:");
+            session.send(imagelink);
+            var msg = new builder.Message(session);
+            msg.attachmentLayout(builder.AttachmentLayout.carousel)
+            msg.attachments([
+                new builder.HeroCard(session)
+                    .title("Image Link")
+                    .images([builder.CardImage.create(session, imagelink)])
+            ]);
+            session.send(msg);
+            session.beginDialog('ImageConfirm');
+
+        } else {
+            session.send("This is not a valid image link, please try again");
+            session.beginDialog('ImageLink');
+        }
+    }
+
+])
+bot.dialog('ImageConfirm', [
+    function (session, results) {
+        builder.Prompts.confirm(session, "Is this the image you wanted to analyze?");
+
+    },
+    function (session, results) {
+        if (results.response) {
+            session.send('Analyzing image...');
+
+            'use strict';
+
+            const request = require('request');
+
+            // Replace <Subscription Key> with your valid subscription key.
+            const subscriptionKey = '553f29bf6b9d4fae87ae6bb844577ce5';
+
+            // You must use the same location in your REST call as you used to get your
+            // subscription keys. For example, if you got your subscription keys from
+            // westus, replace "westcentralus" in the URL below with "westus".
+            const uriBase =
+                'https://centralus.api.cognitive.microsoft.com/vision/v2.0/analyze';
+
+            const imageUrl =
+                imagelink;
+
+            // Request parameters.
+            const params = {
+                'visualFeatures': 'Categories,Description,Color',
+                'details': '',
+                'language': 'en'
+            };
+
+            const options = {
+                uri: uriBase,
+                qs: params,
+                body: '{"url": ' + '"' + imageUrl + '"}',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Ocp-Apim-Subscription-Key': subscriptionKey
+                }
+            };
+
+            request.post(options,(error, response, body) => {
+                if (error) {
+                    console.log('Error: ', error);
+                    return;
+                }
+                let jsonResponse = JSON.stringify(JSON.parse(body), null, '  ');
+                console.log('JSON Response\n');
+                console.log(jsonResponse);
+                var caption = jsonResponse.substr(jsonResponse.indexOf("text"));
+                var stringtosplitcaption = caption.split('confidence');
+                var secondstep = stringtosplitcaption[0];
+                var finalstep = secondstep.split(',');
+                session.send(finalstep[0]);
+                if (jsonResponse.includes("people")) {
+                    session.beginDialog('StartFaceAPI');
+                }
+            });
+
+        } else {
+            session.send("Please restart.");
+            session.beginDialog('ImageLink');
+        }
+    }
+
+])
+bot.dialog('UploadImage', [
+    function (session, results) {
+        builder.Prompts.attachment(session, "Upload an image to be analyzed");
+
+    },
+    function (session, results) {
+        var attachment = results.response[0];
+        session.send({
+            text: "This is the image you sent",
+            attachments: [
+                {
+                    contentType: attachment.contentType,
+                    contentUrl: attachment.contentUrl,
+                    name: attachment.name
+                }
+            ]
+        });
+        stringurl = attachment.contentUrl;
+        builder.Prompts.confirm(session, 'Is this the image that you want to analyze?');
+
+    },
+    function (session, results) {
+        if (results.response) {
+            session.send('Beginning image analysis...');
+            builder.Prompts.confirm(session,"Do you want to view the image url?");
+            
+        } else {
+            session.send("Please restart.");
+            session.beginDialog('AnalyzeImage');
+        }
+    },
+    function(session, results){
+        if(results.response){
+            session.send(stringurl);
+            session.beginDialog('FaceAnalysis');
+        }else{
+            session.beginDialog('FaceAnalysis');
+        }
+    }
+
+])
+bot.dialog('FaceAnalysis',[
+    function(session){
+        'use strict';
+
+            const request = require('request');
+
+            // Replace <Subscription Key> with your valid subscription key.
+            const subscriptionKey = '553f29bf6b9d4fae87ae6bb844577ce5';
+
+            // You must use the same location in your REST call as you used to get your
+            // subscription keys. For example, if you got your subscription keys from
+            // westus, replace "westcentralus" in the URL below with "westus".
+            const uriBase =
+                'https://centralus.api.cognitive.microsoft.com/vision/v2.0/analyze';
+
+            const imageUrl =
+                stringurl;
+
+            // Request parameters.
+            const params = {
+                'visualFeatures': 'Categories,Description,Color',
+                'details': '',
+                'language': 'en'
+            };
+
+            const options = {
+                uri: uriBase,
+                qs: params,
+                body: '{"url": ' + '"' + imageUrl + '"}',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Ocp-Apim-Subscription-Key': subscriptionKey
+                }
+            };
+
+            request.post(options,(error, response, body) => {
+                if (error) {
+                    console.log('Error: ', error);
+                    return;
+                }
+                let jsonResponse = JSON.stringify(JSON.parse(body), null, '  ');
+                console.log('JSON Response\n');
+                console.log(jsonResponse);
+                var caption = jsonResponse.substr(jsonResponse.indexOf("text"));
+                var stringtosplitcaption = caption.split('confidence');
+                var secondstep = stringtosplitcaption[0];
+                var finalstep = secondstep.split(',');
+                session.send(finalstep[0]);
+                if (finalstep[0].includes("people")) {
+                    session.beginDialog('StartFaceAPI2');
+                }
+            });
+    }
+])
+bot.dialog('StartFaceAPI', [
+    function (session) {
+        builder.Prompts.confirm(session, "Face(s) were detected in the image uploaded, would you like to analyze the faces?");
+    },
+    function (session, results) {
+        if (results.response) {
+            session.send("Analyzing the faces in the image...");
+            'use strict';
+
+            const request = require('request');
+
+            // Replace <Subscription Key> with your valid subscription key.
+            const subscriptionKey = '1fff75c0270e4991a3b36f32b56aa39c';
+
+            // You must use the same location in your REST call as you used to get your
+            // subscription keys. For example, if you got your subscription keys from
+            // westus, replace "westcentralus" in the URL below with "westus".
+            const uriBase = 'https://centralus.api.cognitive.microsoft.com/face/v1.0/detect';
+
+            const imageUrl =
+                imagelink;
+
+            // Request parameters.
+            const params = {
+                'returnFaceId': 'true',
+                'returnFaceLandmarks': 'false',
+                'returnFaceAttributes': 'age,gender,headPose,smile,facialHair,glasses,' +
+                'emotion,hair,makeup,occlusion,accessories,blur,exposure,noise'
+            };
+
+            const options = {
+                uri: uriBase,
+                qs: params,
+                body: '{"url": ' + '"' + imageUrl + '"}',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Ocp-Apim-Subscription-Key': subscriptionKey
+                }
+            };
+
+            request.post(options,(error, response, body) => {
+                if (error) {
+                    console.log('Error: ', error);
+                    return;
+                }
+                let jsonResponse = JSON.stringify(JSON.parse(body), null, '  ');
+                console.log('JSON Response\n');
+                console.log(jsonResponse);
+                emotionstring = jsonResponse;
+                analyzedimage = jsonResponse;
+                var peoplesearch = jsonResponse;
+                amount = (peoplesearch.match(/faceId/g) || []).length;
+                var amountstring = amount.toString();
+                session.send("There are " + amountstring + " faces detected in this image");
+                session.beginDialog('FaceCommands');
+            });
+
+
+        }
+    },
+
+
+])
+bot.dialog('StartFaceAPI2', [
+    function (session) {
+        builder.Prompts.confirm(session, "Face(s) were detected in the image uploaded, would you like to analyze the faces?");
+    },
+    function (session, results) {
+        if (results.response) {
+            session.send("Analyzing the faces in the image...");
+            'use strict';
+
+            const request = require('request');
+
+            // Replace <Subscription Key> with your valid subscription key.
+            const subscriptionKey = '1fff75c0270e4991a3b36f32b56aa39c';
+
+            // You must use the same location in your REST call as you used to get your
+            // subscription keys. For example, if you got your subscription keys from
+            // westus, replace "westcentralus" in the URL below with "westus".
+            const uriBase = 'https://centralus.api.cognitive.microsoft.com/face/v1.0/detect';
+
+            const imageUrl =
+                stringurl;
+
+            // Request parameters.
+            const params = {
+                'returnFaceId': 'true',
+                'returnFaceLandmarks': 'false',
+                'returnFaceAttributes': 'age,gender,headPose,smile,facialHair,glasses,' +
+                'emotion,hair,makeup,occlusion,accessories,blur,exposure,noise'
+            };
+
+            const options = {
+                uri: uriBase,
+                qs: params,
+                body: '{"url": ' + '"' + imageUrl + '"}',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Ocp-Apim-Subscription-Key': subscriptionKey
+                }
+            };
+
+            request.post(options,(error, response, body) => {
+                if (error) {
+                    console.log('Error: ', error);
+                    return;
+                }
+                let jsonResponse = JSON.stringify(JSON.parse(body), null, '  ');
+                console.log('JSON Response\n');
+                console.log(jsonResponse);
+                emotionstring2 = jsonResponse;
+                analyzedimage2 = jsonResponse;
+                var peoplesearch = jsonResponse;
+                amount2 = (peoplesearch.match(/faceId/g) || []).length;
+                var amountstring = amount2.toString();
+                session.send("There are " + amountstring + " faces detected in this image");
+                session.beginDialog('FaceCommands2');
+            });
+
+
+        }
+    },
+
+
+])
+
+bot.dialog('FaceCommands2', [
+    function (session) {
+        builder.Prompts.text(session, "These are the available commands: \n -Snapshot of each face");
+    },
+    function (session, results) {
+        var resp = results.response;
+        var resplower = resp.toLowerCase();
+        var i;
+        var j;
+        var faceprofile = [];
+        var cutstring = " ";
+        var newstring = " ";
+        var stringtosplit = analyzedimage2.split('faceAttributes');
+        var stringtosplitnew = [];
+
+        for (j = 1; j <= stringtosplit.length; j++) {
+            stringtosplitnew[j] = stringtosplit[j - 1];
+        }
+
+        if (resplower.includes("snapshot")) {
+
+            var stringcut = " ";
+
+            for (i = 1; i <= amount2; i++) {
+                stringcut = stringtosplitnew[i].substr(stringtosplitnew[i].indexOf("faceRectangle"), 100);
+                faceprofile[i] = stringcut;
+                newstring = faceprofile[i].substr(faceprofile[i].indexOf("top") + 5, 10);
+                top2[i] = parseInt(newstring);
+                newstring = faceprofile[i].substr(faceprofile[i].indexOf("left") + 6, 10);
+                left2[i] = parseInt(newstring);
+                newstring = faceprofile[i].substr(faceprofile[i].indexOf("width") + 7, 10);
+                width2[i] = parseInt(newstring);
+                newstring = faceprofile[i].substr(faceprofile[i].indexOf("height") + 8, 11);
+                height2[i] = parseInt(newstring);
+
+
+            }
+
+
+            builder.Prompts.text(session, "Which person should be displayed? \n Options \n - 1 through people in picture");
+        } else {
+            session.send("None of these commands were recognized, try again");
+            session.beginDialog('FaceCommands2');
+        }
+
+
+    },
+    function (session, results) {
+        var answer = results.response;
+        answernumber2 = parseInt(answer);
+
+        if (answernumber2 > amount2 || answernumber2 < 1) {
+            session.send("The number you typed in was greater than or less than the amount of people in the picture, please try again.");
+            session.beginDialog('FaceCommands2');
+        }
+        else {
+            session.beginDialog('Cropper2');
+        }
+
+    }
+
+]);
+bot.dialog('FaceCommands', [
+    function (session) {
+        builder.Prompts.text(session, "These are the available commands: \n -Snapshot of each face");
+    },
+    function (session, results) {
+        var resp = results.response;
+        var resplower = resp.toLowerCase();
+        var i;
+        var j;
+        var faceprofile = [];
+        var cutstring = " ";
+        var newstring = " ";
+        var stringtosplit = analyzedimage.split('faceAttributes');
+        var stringtosplitnew = [];
+        for (j = 1; j <= stringtosplit.length; j++) {
+            stringtosplitnew[j] = stringtosplit[j - 1];
+        }
+
+        if (resplower.includes("snapshot")) {
+
+            var stringcut = " ";
+
+            for (i = 1; i <= amount; i++) {
+                stringcut = stringtosplitnew[i].substr(stringtosplitnew[i].indexOf("faceRectangle"), 100);
+                faceprofile[i] = stringcut;
+                newstring = faceprofile[i].substr(faceprofile[i].indexOf("top") + 5, 10);
+                top[i] = parseInt(newstring);
+                newstring = faceprofile[i].substr(faceprofile[i].indexOf("left") + 6, 10);
+                left[i] = parseInt(newstring);
+                newstring = faceprofile[i].substr(faceprofile[i].indexOf("width") + 7, 10);
+                width[i] = parseInt(newstring);
+                newstring = faceprofile[i].substr(faceprofile[i].indexOf("height") + 8, 11);
+                height[i] = parseInt(newstring);
+
+
+            }
+
+
+            builder.Prompts.text(session, "Which person should be displayed? \n Options \n - 1 through people in picture");
+        } else {
+            session.send("None of these commands were recognized, try again");
+            session.beginDialog('FaceCommands');
+        }
+
+
+    },
+    function (session, results) {
+        var answer = results.response;
+        answernumber = parseInt(answer);
+
+        if (answernumber > amount || answernumber < 1) {
+            session.send("The number you typed in was greater than or less than the amount of people in the picture, please try again.");
+            session.beginDialog('FaceCommands');
+        }
+        else {
+            session.beginDialog('Cropper');
+        }
+
+    }
+
+]);
+
+bot.dialog('Cropper', [
+    function (session) {
+        Jimp.read(imagelink,(err, img) => {
+            if (err) throw err;
+
+            img.crop(left[answernumber], top[answernumber], width[answernumber], height[answernumber]);
+            img.write('croppedimage.jpg');
+        })
+
+        builder.Prompts.confirm(session, "Please confirm this is the right person (yes/no)");
+    },
+    function (session, results) {
+        var linkofimage = " ";
+        var linkgetter = " ";
+        if (results.response) {
+            imguruploader(fs.readFileSync('croppedimage.jpg'), { title: 'Hello!' }).then(data => {
+                console.log(data);
+                linkofimage = JSON.stringify(data);
+                linkgetter = linkofimage.substr(linkofimage.indexOf("link") + 7, 31);
+                session.send("This is the link to the snapshot " + linkgetter);
+                session.send("This is a snapshot of person " + answernumber);
+                var msg = new builder.Message(session);
+                msg.attachmentLayout(builder.AttachmentLayout.carousel)
+                msg.attachments([
+                    new builder.HeroCard(session)
+                        .title("Person: " + answernumber)
+                        .images([builder.CardImage.create(session, linkgetter)])
+                ]);
+                session.send(msg);
+            });
+
+            builder.Prompts.text(session, "Available commands: \n - Emotion Detector \n - Analyze another image \n - Go to available commands for faces");
+        } else {
+            session.beginDialog('FaceCommands');
+        }
+    },
+    function (session, results) {
+        var answer2 = results.response;
+        var lowercaseanswer2 = answer2.toLowerCase();
+        if (lowercaseanswer2.includes("emotion")) {
+            session.beginDialog('EmotionDetector');
+        }
+        else if (lowercaseanswer2.includes("commands")) {
+            session.beginDialog('FaceCommands');
+        }
+        else {
+            session.beginDialog('AnalyzeaImage');
+        }
+    }
+]);
+bot.dialog('Cropper2', [
+    function (session) {
+        Jimp.read(stringurl,(err, img) => {
+            if (err) throw err;
+
+            img.crop(left2[answernumber2], top2[answernumber2], width2[answernumber2], height2[answernumber2]);
+            img.write('croppedimage2.jpg');
+        })
+
+        builder.Prompts.confirm(session, "Please confirm this is the right person (yes/no)");
+    },
+    function (session, results) {
+        var linkofimage = " ";
+        var linkgetter = " ";
+        if (results.response) {
+            imguruploader(fs.readFileSync('croppedimage2.jpg'), { title: 'Hello!' }).then(data => {
+                console.log(data);
+                linkofimage = JSON.stringify(data);
+                linkgetter = linkofimage.substr(linkofimage.indexOf("link") + 7, 31);
+                session.send("This is a link to the snapshot: " + linkgetter);
+                session.send("This is a snapshot of person " + answernumber2);
+                var msg = new builder.Message(session);
+                msg.attachmentLayout(builder.AttachmentLayout.carousel)
+                msg.attachments([
+                    new builder.HeroCard(session)
+                        .title("Person: " + answernumber2)
+                        .images([builder.CardImage.create(session, linkgetter)])
+                ]);
+                session.send(msg);
+            });
+
+            builder.Prompts.text(session, "Available commands: \n - Emotion Detector \n - Analyze another image \n - Go to available commands for faces");
+        } else {
+            session.beginDialog('FaceCommands2');
+        }
+    },
+    function (session, results) {
+        var answer2 = results.response;
+        var lowercaseanswer2 = answer2.toLowerCase();
+        if (lowercaseanswer2.includes("emotion")) {
+            session.beginDialog('EmotionDetector2');
+        }
+        else if (lowercaseanswer2.includes("commands")) {
+            session.beginDialog('FaceCommands2');
+        }
+        else {
+            session.beginDialog('AnalyzeaImage');
+        }
+    }
+]);
+
+bot.dialog('EmotionDetector2', [
+    function (session) {
+        var imightneedsecurity = emotionstring2.split('blurLevel');
+        var i;
+        var workout = [];
+        for (i = 1; i <= imightneedsecurity.length; i++) {
+            workout[i] = imightneedsecurity[i - 1];
+        }
+        var stringemotion = workout[answernumber2];
+
+        var actualemotion = stringemotion.substr(stringemotion.indexOf('emotion'));
+
+        var anger = actualemotion.substr(actualemotion.indexOf('anger') + 7, 9);
+        var contempt = actualemotion.substr(actualemotion.indexOf('contempt') + 10, 12);
+        var disgust = actualemotion.substr(actualemotion.indexOf('disgust') + 9, 12);
+        var fear = actualemotion.substr(actualemotion.indexOf('fear') + 6, 9);
+        var happiness = actualemotion.substr(actualemotion.indexOf('happiness') + 11, 12);
+        var neutral = actualemotion.substr(actualemotion.indexOf('neutral') + 9, 12);
+        var sadness = actualemotion.substr(actualemotion.indexOf('sadness') + 9, 12);
+        var surprise = actualemotion.substr(actualemotion.indexOf('surprise') + 10, 9);
+
+        var angernumber = parseInt(anger);
+        var contemptnumber = parseInt(contempt);
+        var disgustnumber = parseInt(disgust);
+        var fearnumber = parseInt(fear);
+        var happinessnumber = parseInt(happiness);
+        var neutralnumber = parseInt(neutral);
+        var sadnessnumber = parseInt(sadness);
+        var surprisenumber = parseInt(surprise);
+
+
+        if (angernumber == 1) {
+            session.send("Person " + answernumber2 + " is angry right now");
+        }
+        else if (contemptnumber == 1) {
+            session.send("Person " + answernumber2 + " is feeling contempt right now");
+        }
+        else if (disgustnumber == 1) {
+            session.send("Person " + answernumber2 + " is feeling disgusted right now");
+        }
+        else if (fearnumber == 1) {
+            session.send("Person " + answernumber2 + " is scared right now");
+        }
+        else if (happinessnumber == 1) {
+            session.send("Person " + answernumber2 + " is feeling happy right now");
+        }
+        else if (neutralnumber == 1) {
+            session.send("Person " + answernumber2 + " is feeling neutral right now");
+        }
+        else if (sadnessnumber == 1) {
+            session.send("Person " + answernumber2 + " is feeling sad right now");
+        }
+        else if (surprisenumber == 1) {
+            session.send("Person " + answernumber2 + " is feeling surprised right now");
+        }
+
+        session.beginDialog("Final2");
+    }
+]);
+bot.dialog('EmotionDetector', [
+    function (session) {
+        var imightneedsecurity = emotionstring.split('blurLevel');
+        var i;
+        var workout = [];
+        for (i = 1; i <= imightneedsecurity.length; i++) {
+            workout[i] = imightneedsecurity[i - 1];
+        }
+        var stringemotion = workout[answernumber];
+
+        var actualemotion = stringemotion.substr(stringemotion.indexOf('emotion'));
+
+        var anger = actualemotion.substr(actualemotion.indexOf('anger') + 7, 9);
+        var contempt = actualemotion.substr(actualemotion.indexOf('contempt') + 10, 12);
+        var disgust = actualemotion.substr(actualemotion.indexOf('disgust') + 9, 12);
+        var fear = actualemotion.substr(actualemotion.indexOf('fear') + 6, 9);
+        var happiness = actualemotion.substr(actualemotion.indexOf('happiness') + 11, 12);
+        var neutral = actualemotion.substr(actualemotion.indexOf('neutral') + 9, 12);
+        var sadness = actualemotion.substr(actualemotion.indexOf('sadness') + 9, 12);
+        var surprise = actualemotion.substr(actualemotion.indexOf('surprise') + 10, 9);
+
+        var angernumber = parseInt(anger);
+        var contemptnumber = parseInt(contempt);
+        var disgustnumber = parseInt(disgust);
+        var fearnumber = parseInt(fear);
+        var happinessnumber = parseInt(happiness);
+        var neutralnumber = parseInt(neutral);
+        var sadnessnumber = parseInt(sadness);
+        var surprisenumber = parseInt(surprise);
+
+
+        if (angernumber == 1) {
+            session.send("Person " + answernumber + " is angry right now");
+        }
+        else if (contemptnumber == 1) {
+            session.send("Person " + answernumber + " is feeling contempt right now");
+        }
+        else if (disgustnumber == 1) {
+            session.send("Person " + answernumber + " is feeling disgusted right now");
+        }
+        else if (fearnumber == 1) {
+            session.send("Person " + answernumber + " is scared right now");
+        }
+        else if (happinessnumber == 1) {
+            session.send("Person " + answernumber + " is feeling happy right now");
+        }
+        else if (neutralnumber == 1) {
+            session.send("Person " + answernumber + " is feeling neutral right now");
+        }
+        else if (sadnessnumber == 1) {
+            session.send("Person " + answernumber + " is feeling sad right now");
+        }
+        else if (surprisenumber == 1) {
+            session.send("Person " + answernumber + " is feeling surprised right now");
+        }
+
+        session.beginDialog("Final");
+    }
+])
+
+bot.dialog('Final',[
+    function(session){
+        builder.Prompts.text(session, "Available Commands: \n - Other person \n - Analyze another image");
+    },
+    function(session,results){
+        var answer = results.response;
+        var lowercaseanswer = answer.toLowerCase();
+        if(lowercaseanswer.includes("person")){
+            session.beginDialog('FaceCommands');
+        } 
+        else{
+            session.beginDialog('AnalyzeaImage');
+        }
+        
+    }
+]);
+bot.dialog('Final2',[
+    function(session){
+        builder.Prompts.text(session, "Available Commands: \n - Other person \n - Analyze another image");
+    },
+    function(session,results){
+        var answer = results.response;
+        var lowercaseanswer = answer.toLowerCase();
+        if(lowercaseanswer.includes("person")){
+            session.beginDialog('FaceCommands2');
+        } 
+        else{
+            session.beginDialog('AnalyzeaImage');
+        }
+        
+    }
+]);
+
+
+
